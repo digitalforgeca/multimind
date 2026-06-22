@@ -6,7 +6,9 @@ build-backend = "hatchling.build"
 name = "multimind"
 version = "0.1.0"
 description = "Multi-Model Mind Python SDK — model registry, inference, signals, and retrain pipeline."
+readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 authors = [
     { name = "Digital Forge Studios Inc.", email = "forge@dforge.ca" },

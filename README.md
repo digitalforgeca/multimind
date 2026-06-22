@@ -36,10 +36,14 @@ Dual implementation: **Rust** (`rust/`) and **Python** (`python/`). Both expose 
 
 ## Repo Layout
 
+Each subdirectory is independently installable with its own README, LICENSE, and build config.
+
 ```
 multimind/
-├── rust/                 # Rust crate
+├── rust/                 # Rust crate (cargo build / crates.io)
 │   ├── Cargo.toml
+│   ├── README.md
+│   ├── LICENSE
 │   └── src/
 │       ├── lib.rs        # Core types, traits (SignalStore, ModelBackend)
 │       ├── config.rs     # TOML config parsing
@@ -47,13 +51,35 @@ multimind/
 │       ├── backends/     # ONNX inference backends
 │       ├── signals/      # SQLite + Postgres signal stores
 │       └── retrain/      # Pipeline, weight learning, artifacts
-├── python/               # Python package (pip install multimind)
+├── python/               # Python package (pip install / PyPI)
 │   ├── pyproject.toml
+│   ├── README.md
+│   ├── LICENSE
 │   ├── multimind/        # Package source (mirrors Rust module structure)
 │   └── tests/            # pytest suite
 ├── LICENSE
 └── README.md
 ```
+
+### Install just one language
+
+**Python only:**
+```bash
+git clone https://github.com/digitalforgeca/multimind.git
+cd multimind/python
+pip install -e ".[dev]"
+pytest -v
+```
+
+**Rust only:**
+```bash
+git clone https://github.com/digitalforgeca/multimind.git
+cd multimind/rust
+cargo build --features full
+cargo test --features full
+```
+
+Each subdirectory is a complete, self-contained project — no cross-directory dependencies.
 
 ## Core Concepts
 
