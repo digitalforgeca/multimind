@@ -153,7 +153,14 @@ pub trait SignalStore: Send + Sync {
     fn count_pending(&self, model_id: &str) -> anyhow::Result<usize>;
 
     /// Export pending signals for retraining.
-    fn export_pending(&self, model_id: &str) -> anyhow::Result<Vec<TrainingSignal>>;
+    ///
+    /// `limit` caps the number of rows returned. Pass `None` to export all
+    /// pending signals (use with caution on large stores).
+    fn export_pending(
+        &self,
+        model_id: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<TrainingSignal>>;
 
     /// Mark signals as consumed (after successful retrain).
     fn mark_consumed(&self, model_id: &str) -> anyhow::Result<()>;

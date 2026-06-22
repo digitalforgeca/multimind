@@ -11,7 +11,7 @@ use tokio::sync::Notify;
 use tracing::{error, info, warn};
 
 use crate::registry::ModelRegistry;
-use crate::{SignalStore, TrainingSignal};
+use crate::SignalStore;
 
 use super::types::*;
 
@@ -67,6 +67,11 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
         }
     }
 
+    /// Whether a retrain cycle is currently running.
+    pub fn is_running(&self) -> bool {
+        *self.running.read()
+    }
+
     /// Manually trigger a retrain cycle (non-blocking).
     pub fn trigger(&self) {
         self.trigger.notify_one();
@@ -74,8 +79,9 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
 
     /// Run a single retrain cycle synchronously.
     ///
-    /// Exports signals from the store, extracts features, learns new weights,
-    /// creates an artifact, and optionally hot-swaps the model in the registry.
+    /// Exports signals from the store (up to `batch_size`), extracts features,
+    /// learns new weights, creates an artifact, and optionally hot-swaps the
+    /// model in the registry.
     pub fn run_retrain(
         &self,
         signal_store: &dyn SignalStore,
@@ -84,24 +90,21 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
         let start = Instant::now();
         let previous_version = self.current_model.read().version();
 
-        // Mark as running
+        // Mark as running (scopeguard resets on any exit path)
         *self.running.write() = true;
         let running_guard = self.running.clone();
         let _guard = scopeguard::guard((), move |_| {
             *running_guard.write() = false;
         });
 
-        // 1. Export pending signals
-        let signals = signal_store
-            .export_pending(&self.model_id)
+        // 1. Export pending signals (limited to batch_size at the DB level)
+        let batch = signal_store
+            .export_pending(&self.model_id, Some(self.config.batch_size))
             .map_err(|e| format!("failed to export signals: {e}"))?;
 
-        if signals.is_empty() {
+        if batch.is_empty() {
             return Err("no pending signals".into());
         }
-
-        let batch_size = signals.len().min(self.config.batch_size);
-        let batch: Vec<TrainingSignal> = signals.into_iter().take(batch_size).collect();
 
         info!(
             model_id = %self.model_id,
@@ -117,8 +120,7 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
         let updated = learn_weights(&current, &features, &self.config);
 
         // 4. Create artifact
-        let artifact =
-            RetrainArtifact::from_model(&updated, &self.model_id, batch.len());
+        let artifact = RetrainArtifact::from_model(&updated, &self.model_id, batch.len());
 
         // 5. Persist artifact
         let artifact_path = match artifact.save(&self.config.artifact_dir) {
@@ -142,7 +144,7 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
             );
         }
 
-        // 7. Update current model
+        // 7. Update current model + artifact
         *self.current_model.write() = updated;
         *self.latest_artifact.write() = Some(artifact);
 
@@ -186,120 +188,65 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
     ///
     /// Returns a handle that can be used to abort the background task.
     pub fn start_background(
-        &self,
+        self: &Arc<Self>,
         signal_store: Arc<dyn SignalStore>,
         registry: Option<Arc<ModelRegistry>>,
-    ) -> tokio::task::JoinHandle<()> {
-        let config = self.config.clone();
-        let model_id = self.model_id.clone();
-        let current_model = self.current_model.clone();
-        let latest_artifact = self.latest_artifact.clone();
-        let latest_result = self.latest_result.clone();
-        let running = self.running.clone();
+    ) -> tokio::task::JoinHandle<()>
+    where
+        M: 'static,
+    {
+        let pipeline = Arc::clone(self);
         let trigger = self.trigger.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(config.check_interval);
+            let mut interval = tokio::time::interval(pipeline.config.check_interval);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             loop {
                 tokio::select! {
                     _ = interval.tick() => {},
                     _ = trigger.notified() => {
-                        info!(model_id = %model_id, "retrain: manual trigger received");
+                        info!(model_id = %pipeline.model_id, "retrain: manual trigger received");
                     },
                 }
 
-                // Check threshold
-                let pending = match signal_store.count_pending(&model_id) {
+                // Check threshold before running (avoids loading signals unnecessarily)
+                let pending = match signal_store.count_pending(&pipeline.model_id) {
                     Ok(n) => n,
                     Err(e) => {
-                        error!(model_id = %model_id, error = %e, "retrain: failed to count pending signals");
+                        error!(
+                            model_id = %pipeline.model_id,
+                            error = %e,
+                            "retrain: failed to count pending signals"
+                        );
                         continue;
                     }
                 };
 
-                if pending < config.signal_threshold {
+                if pending < pipeline.config.signal_threshold {
                     continue;
                 }
 
-                // Run retrain
-                *running.write() = true;
-
-                let start = Instant::now();
-                let previous_version = current_model.read().version();
-
-                let signals = match signal_store.export_pending(&model_id) {
-                    Ok(s) => s,
+                // Delegate to run_retrain — single implementation, no duplication
+                let reg_ref = registry.as_deref();
+                match pipeline.run_retrain(signal_store.as_ref(), reg_ref) {
+                    Ok(result) => {
+                        info!(
+                            model_id = %result.model_id,
+                            version = result.new_version,
+                            signals = result.signals_consumed,
+                            duration_ms = result.duration_ms,
+                            "retrain: background cycle complete"
+                        );
+                    }
                     Err(e) => {
-                        error!(model_id = %model_id, error = %e, "retrain: failed to export signals");
-                        *running.write() = false;
-                        continue;
-                    }
-                };
-
-                let batch_size = signals.len().min(config.batch_size);
-                let batch: Vec<TrainingSignal> =
-                    signals.into_iter().take(batch_size).collect();
-
-                if batch.is_empty() {
-                    *running.write() = false;
-                    continue;
-                }
-
-                info!(
-                    model_id = %model_id,
-                    signals = batch.len(),
-                    "retrain: background cycle starting"
-                );
-
-                let features = extract_features(&batch);
-                let current = current_model.read().clone();
-                let updated = learn_weights(&current, &features, &config);
-
-                let artifact =
-                    RetrainArtifact::from_model(&updated, &model_id, batch.len());
-
-                let artifact_path = match artifact.save(&config.artifact_dir) {
-                    Ok(path) => Some(path.to_string_lossy().to_string()),
-                    Err(e) => {
-                        warn!(model_id = %model_id, error = %e, "retrain: artifact persist failed");
-                        None
-                    }
-                };
-
-                if let Err(e) = signal_store.mark_consumed(&model_id) {
-                    error!(model_id = %model_id, error = %e, "retrain: mark consumed failed");
-                }
-
-                *current_model.write() = updated;
-                *latest_artifact.write() = Some(artifact);
-
-                if let (Some(ref reg), Some(ref path)) = (&registry, &artifact_path) {
-                    if let Err(e) = reg.reload_model(&model_id, std::path::Path::new(path)) {
-                        warn!(model_id = %model_id, error = %e, "retrain: hot-swap failed");
+                        warn!(
+                            model_id = %pipeline.model_id,
+                            error = %e,
+                            "retrain: background cycle failed"
+                        );
                     }
                 }
-
-                let result = RetrainResult {
-                    model_id: model_id.clone(),
-                    new_version: current_model.read().version(),
-                    previous_version,
-                    signals_consumed: batch.len(),
-                    artifact_path,
-                    duration_ms: start.elapsed().as_millis() as u64,
-                };
-
-                info!(
-                    model_id = %model_id,
-                    version = result.new_version,
-                    signals = result.signals_consumed,
-                    duration_ms = result.duration_ms,
-                    "retrain: background cycle complete"
-                );
-
-                *latest_result.write() = Some(result);
-                *running.write() = false;
             }
         })
     }

@@ -85,20 +85,39 @@ impl SignalStore for SqliteSignalStore {
         Ok(count as usize)
     }
 
-    fn export_pending(&self, model_id: &str) -> anyhow::Result<Vec<TrainingSignal>> {
+    fn export_pending(
+        &self,
+        model_id: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<TrainingSignal>> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| anyhow::anyhow!("lock: {e}"))?;
-        let mut stmt = conn.prepare(
-            "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
-             FROM model_signals \
-             WHERE model_id = ?1 AND consumed = 0 \
-             ORDER BY created_at ASC",
-        )?;
 
+        let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match limit {
+            Some(n) => (
+                "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                 FROM model_signals \
+                 WHERE model_id = ?1 AND consumed = 0 \
+                 ORDER BY created_at ASC \
+                 LIMIT ?2"
+                    .to_string(),
+                vec![Box::new(model_id.to_string()), Box::new(n as i64)],
+            ),
+            None => (
+                "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                 FROM model_signals \
+                 WHERE model_id = ?1 AND consumed = 0 \
+                 ORDER BY created_at ASC"
+                    .to_string(),
+                vec![Box::new(model_id.to_string())],
+            ),
+        };
+
+        let mut stmt = conn.prepare(&sql)?;
         let signals = stmt
-            .query_map(rusqlite::params![model_id], |row| {
+            .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                 Ok(TrainingSignal {
                     model_id: row.get(0)?,
                     input_text: row.get(1)?,
@@ -145,7 +164,7 @@ mod tests {
         assert_eq!(store.count_pending("test_model").unwrap(), 1);
         assert_eq!(store.count_pending("other_model").unwrap(), 0);
 
-        let signals = store.export_pending("test_model").unwrap();
+        let signals = store.export_pending("test_model", None).unwrap();
         assert_eq!(signals.len(), 1);
         assert_eq!(signals[0].predicted_label, "reject");
         assert_eq!(signals[0].corrected_label, "store");
@@ -187,5 +206,34 @@ mod tests {
         store.mark_consumed("model_a").unwrap();
         assert_eq!(store.count_pending("model_a").unwrap(), 0);
         assert_eq!(store.count_pending("model_b").unwrap(), 1);
+    }
+
+    #[test]
+    fn export_with_limit() {
+        let store = SqliteSignalStore::in_memory().unwrap();
+
+        for i in 0..10 {
+            store
+                .record(&TrainingSignal {
+                    model_id: "test".to_string(),
+                    input_text: format!("input {i}"),
+                    predicted_label: "a".to_string(),
+                    corrected_label: "b".to_string(),
+                    original_confidence: Some(0.5),
+                })
+                .unwrap();
+        }
+
+        // Without limit: get all 10
+        let all = store.export_pending("test", None).unwrap();
+        assert_eq!(all.len(), 10);
+
+        // With limit: get exactly 3
+        let limited = store.export_pending("test", Some(3)).unwrap();
+        assert_eq!(limited.len(), 3);
+
+        // Limit larger than available: get all
+        let big_limit = store.export_pending("test", Some(100)).unwrap();
+        assert_eq!(big_limit.len(), 10);
     }
 }

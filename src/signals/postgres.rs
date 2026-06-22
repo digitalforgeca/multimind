@@ -78,17 +78,38 @@ impl SignalStore for PgSignalStore {
         })
     }
 
-    fn export_pending(&self, model_id: &str) -> anyhow::Result<Vec<TrainingSignal>> {
+    fn export_pending(
+        &self,
+        model_id: &str,
+        limit: Option<usize>,
+    ) -> anyhow::Result<Vec<TrainingSignal>> {
         self.block_on(async {
-            let rows: Vec<(String, String, String, String, Option<f32>)> = sqlx::query_as(
-                "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
-                 FROM model_signals \
-                 WHERE model_id = $1 AND consumed = FALSE \
-                 ORDER BY created_at ASC",
-            )
-            .bind(model_id)
-            .fetch_all(&self.pool)
-            .await?;
+            let rows: Vec<(String, String, String, String, Option<f32>)> = match limit {
+                Some(n) => {
+                    sqlx::query_as(
+                        "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                         FROM model_signals \
+                         WHERE model_id = $1 AND consumed = FALSE \
+                         ORDER BY created_at ASC \
+                         LIMIT $2",
+                    )
+                    .bind(model_id)
+                    .bind(n as i64)
+                    .fetch_all(&self.pool)
+                    .await?
+                }
+                None => {
+                    sqlx::query_as(
+                        "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                         FROM model_signals \
+                         WHERE model_id = $1 AND consumed = FALSE \
+                         ORDER BY created_at ASC",
+                    )
+                    .bind(model_id)
+                    .fetch_all(&self.pool)
+                    .await?
+                }
+            };
 
             Ok(rows
                 .into_iter()

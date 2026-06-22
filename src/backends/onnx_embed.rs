@@ -138,7 +138,7 @@ impl ModelBackend for OnnxEmbedBackend {
         };
 
         // Apply softmax if values aren't already probabilities
-        let probs = if raw.iter().all(|&v| v >= 0.0 && v <= 1.0)
+        let probs = if raw.iter().all(|&v| (0.0..=1.0).contains(&v))
             && (raw.iter().sum::<f32>() - 1.0).abs() < 0.1
         {
             raw // Already probabilities

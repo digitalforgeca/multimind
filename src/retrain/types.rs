@@ -47,7 +47,11 @@ impl Default for RetrainConfig {
 ///
 /// Consumers implement this for their domain-specific model shape.
 /// The retrain pipeline operates on this trait generically.
-pub trait WeightModel: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> {
+///
+/// Note: [`RetrainArtifact::from_model`] only requires the trait methods,
+/// not `Serialize`/`Deserialize`. If your model needs serialization for
+/// persistence, implement serde on your concrete type.
+pub trait WeightModel: Clone + Send + Sync {
     /// Model version (monotonically increasing).
     fn version(&self) -> u64;
 
@@ -451,6 +455,115 @@ mod tests {
     }
 
     #[test]
+    fn learn_weights_applies_above_threshold() {
+        #[derive(Clone, Serialize, Deserialize)]
+        struct TestModel {
+            version: u64,
+            adjustments: HashMap<String, f64>,
+        }
+
+        impl WeightModel for TestModel {
+            fn version(&self) -> u64 {
+                self.version
+            }
+            fn set_version(&mut self, v: u64) {
+                self.version = v;
+            }
+            fn categories(&self) -> Vec<String> {
+                self.adjustments.keys().cloned().collect()
+            }
+            fn adjustment(&self, cat: &str) -> f64 {
+                self.adjustments.get(cat).copied().unwrap_or(1.0)
+            }
+            fn set_adjustment(&mut self, cat: &str, val: f64) {
+                self.adjustments.insert(cat.to_string(), val);
+            }
+        }
+
+        let model = TestModel {
+            version: 0,
+            adjustments: [("safe".into(), 1.0), ("unsafe".into(), 1.0)]
+                .into_iter()
+                .collect(),
+        };
+
+        // 10 corrections (safe → unsafe) — well above min_corrections_for_update of 5
+        let signals: Vec<_> = (0..10)
+            .map(|i| TrainingSignal {
+                model_id: "test".into(),
+                input_text: format!("input {i}"),
+                predicted_label: "safe".into(),
+                corrected_label: "unsafe".into(),
+                original_confidence: Some(0.6),
+            })
+            .collect();
+
+        let features = extract_features(&signals);
+        let config = RetrainConfig::default();
+        let updated = learn_weights(&model, &features, &config);
+
+        // Version should bump
+        assert_eq!(updated.version, 1);
+        // "safe" had 100% correction rate → should decrease
+        assert!(updated.adjustment("safe") < 1.0);
+    }
+
+    #[test]
+    fn artifact_save_load_round_trip() {
+        #[derive(Clone, Serialize, Deserialize)]
+        struct TestModel {
+            version: u64,
+            adjustments: HashMap<String, f64>,
+        }
+
+        impl WeightModel for TestModel {
+            fn version(&self) -> u64 {
+                self.version
+            }
+            fn set_version(&mut self, v: u64) {
+                self.version = v;
+            }
+            fn categories(&self) -> Vec<String> {
+                self.adjustments.keys().cloned().collect()
+            }
+            fn adjustment(&self, cat: &str) -> f64 {
+                self.adjustments.get(cat).copied().unwrap_or(1.0)
+            }
+            fn set_adjustment(&mut self, cat: &str, val: f64) {
+                self.adjustments.insert(cat.to_string(), val);
+            }
+        }
+
+        let model = TestModel {
+            version: 3,
+            adjustments: [("x".into(), 0.9), ("y".into(), 1.3)]
+                .into_iter()
+                .collect(),
+        };
+
+        let artifact = RetrainArtifact::from_model(&model, "roundtrip_test", 42);
+        let dir = std::env::temp_dir()
+            .join(format!("multimind_test_{}", std::process::id()));
+        let saved_path = artifact.save(dir.to_str().unwrap()).unwrap();
+
+        // Load it back
+        let loaded = RetrainArtifact::load(&saved_path).unwrap();
+        assert_eq!(loaded.model_id, "roundtrip_test");
+        assert_eq!(loaded.version, 3);
+        assert_eq!(loaded.signals_consumed, 42);
+        assert!(loaded.verify());
+        assert_eq!(loaded.checksum, artifact.checksum);
+
+        // Also verify the "latest" pointer was written
+        let latest_path = dir.join("roundtrip_test_latest.json");
+        let latest = RetrainArtifact::load(&latest_path).unwrap();
+        assert_eq!(latest.version, 3);
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn artifact_integrity() {
         #[derive(Clone, Serialize, Deserialize)]
         struct TestModel {
@@ -487,5 +600,113 @@ mod tests {
         assert!(artifact.verify());
         assert_eq!(artifact.version, 1);
         assert_eq!(artifact.signals_consumed, 100);
+    }
+}
+
+/// Integration tests that exercise the full pipeline with a real signal store.
+#[cfg(all(test, feature = "sqlite"))]
+mod integration_tests {
+    use super::*;
+    use crate::SignalStore;
+    use crate::signals::sqlite::SqliteSignalStore;
+    use crate::retrain::pipeline::RetrainPipeline;
+
+    #[derive(Clone, Serialize, Deserialize)]
+    struct TestWeights {
+        version: u64,
+        adjustments: HashMap<String, f64>,
+    }
+
+    impl WeightModel for TestWeights {
+        fn version(&self) -> u64 { self.version }
+        fn set_version(&mut self, v: u64) { self.version = v; }
+        fn categories(&self) -> Vec<String> { self.adjustments.keys().cloned().collect() }
+        fn adjustment(&self, cat: &str) -> f64 { self.adjustments.get(cat).copied().unwrap_or(1.0) }
+        fn set_adjustment(&mut self, cat: &str, val: f64) { self.adjustments.insert(cat.to_string(), val); }
+    }
+
+    #[test]
+    fn pipeline_run_retrain_end_to_end() {
+        let store = SqliteSignalStore::in_memory().unwrap();
+
+        // Seed 10 correction signals
+        for i in 0..10 {
+            store.record(&TrainingSignal {
+                model_id: "test_pipeline".into(),
+                input_text: format!("input {i}"),
+                predicted_label: "safe".into(),
+                corrected_label: "unsafe".into(),
+                original_confidence: Some(0.65),
+            }).unwrap();
+        }
+
+        assert_eq!(store.count_pending("test_pipeline").unwrap(), 10);
+
+        let config = RetrainConfig {
+            signal_threshold: 5,
+            batch_size: 100,
+            min_corrections_for_update: 3,
+            artifact_dir: std::env::temp_dir()
+                .join(format!("multimind_pipeline_test_{}", std::process::id()))
+                .to_string_lossy()
+                .to_string(),
+            ..Default::default()
+        };
+
+        let baseline = TestWeights {
+            version: 0,
+            adjustments: [("safe".into(), 1.0), ("unsafe".into(), 1.0)]
+                .into_iter()
+                .collect(),
+        };
+
+        let pipeline = RetrainPipeline::new(config.clone(), "test_pipeline", baseline);
+
+        // Verify initial state
+        assert_eq!(pipeline.current_model().version(), 0);
+        assert!(pipeline.latest_artifact().is_none());
+
+        // Run retrain
+        let result = pipeline.run_retrain(&store, None).unwrap();
+
+        assert_eq!(result.model_id, "test_pipeline");
+        assert_eq!(result.new_version, 1);
+        assert_eq!(result.previous_version, 0);
+        assert_eq!(result.signals_consumed, 10);
+        assert!(result.artifact_path.is_some());
+
+        // Model should be updated
+        assert_eq!(pipeline.current_model().version(), 1);
+        assert!(pipeline.latest_artifact().is_some());
+
+        // Signals should be consumed
+        assert_eq!(store.count_pending("test_pipeline").unwrap(), 0);
+
+        // Status should reflect new state
+        let status = pipeline.status(0);
+        assert_eq!(status.model_version, 1);
+        assert!(!status.running);
+        assert!(status.last_result.is_some());
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&config.artifact_dir);
+    }
+
+    #[test]
+    fn pipeline_run_retrain_no_signals() {
+        let store = SqliteSignalStore::in_memory().unwrap();
+        let config = RetrainConfig::default();
+        let baseline = TestWeights {
+            version: 0,
+            adjustments: HashMap::new(),
+        };
+
+        let pipeline = RetrainPipeline::new(config, "empty_model", baseline);
+        let result = pipeline.run_retrain(&store, None);
+
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "no pending signals");
+        // Running flag should be reset even on error
+        assert!(!pipeline.is_running());
     }
 }
