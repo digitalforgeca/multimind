@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "multimind"
 version = "0.1.0"
 description = "Multi-Model Mind Python SDK — model registry, inference, signals, and retrain pipeline."
-readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
@@ -38,9 +37,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/digitalforgeca/multimind-py"
-Repository = "https://github.com/digitalforgeca/multimind-py"
-Issues = "https://github.com/digitalforgeca/multimind-py/issues"
+Homepage = "https://github.com/digitalforgeca/multimind"
+Repository = "https://github.com/digitalforgeca/multimind/tree/main/python"
+Issues = "https://github.com/digitalforgeca/multimind/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["multimind"]
