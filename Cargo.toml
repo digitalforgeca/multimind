@@ -1,0 +1,43 @@
+[package]
+name = "multimind"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-Model Mind — generic ONNX model registry, inference, signal collection, and retrain pipeline."
+license = "MIT"
+repository = "https://github.com/digitalforgeca/multimind"
+keywords = ["onnx", "ml", "inference", "retrain", "model-registry"]
+categories = ["science", "algorithms"]
+
+[features]
+default = ["sqlite"]
+postgres = ["dep:sqlx", "dep:tokio", "tokio/rt-multi-thread"]
+sqlite = ["dep:rusqlite"]
+retrain = ["dep:tokio", "dep:sha2", "dep:chrono", "dep:uuid", "dep:parking_lot", "dep:scopeguard"]
+full = ["postgres", "sqlite", "retrain"]
+
+[dependencies]
+anyhow = "1.0"
+ort = { version = "=2.0.0-rc.11", features = ["load-dynamic"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+tracing = "0.1"
+
+# Signal store: Postgres
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres"], optional = true }
+
+# Signal store: SQLite
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+
+# Retrain pipeline
+tokio = { version = "1", features = ["rt", "sync", "time", "macros"], optional = true }
+sha2 = { version = "0.10", optional = true }
+chrono = { version = "0.4", features = ["serde"], optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+parking_lot = { version = "0.12", optional = true }
+scopeguard = { version = "1.2", optional = true }
+
+[workspace]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
