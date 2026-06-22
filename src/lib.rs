@@ -129,6 +129,9 @@ pub trait ModelBackend: Send + Sync {
 /// The consuming service records these; the retrain pipeline reads them.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TrainingSignal {
+    /// Storage-assigned row ID (populated on export, `None` when creating).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signal_id: Option<String>,
     /// Which model produced the original verdict.
     pub model_id: String,
     /// The input that was classified.
@@ -162,6 +165,15 @@ pub trait SignalStore: Send + Sync {
         limit: Option<usize>,
     ) -> anyhow::Result<Vec<TrainingSignal>>;
 
-    /// Mark signals as consumed (after successful retrain).
-    fn mark_consumed(&self, model_id: &str) -> anyhow::Result<()>;
+    /// Mark specific signals as consumed (after successful retrain).
+    ///
+    /// Only the signals with the given IDs are marked. This prevents
+    /// silently eating signals that arrived between export and consume.
+    fn mark_consumed(&self, model_id: &str, signal_ids: &[String]) -> anyhow::Result<()>;
+
+    /// Mark **all** pending signals for a model as consumed.
+    ///
+    /// Use sparingly — prefer `mark_consumed` with specific IDs to avoid
+    /// racing with newly-arrived signals.
+    fn mark_all_consumed(&self, model_id: &str) -> anyhow::Result<()>;
 }

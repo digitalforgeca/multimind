@@ -135,8 +135,12 @@ impl<M: WeightModel + 'static> RetrainPipeline<M> {
             }
         };
 
-        // 6. Mark signals as consumed
-        if let Err(e) = signal_store.mark_consumed(&self.model_id) {
+        // 6. Mark exported signals as consumed (targeted, not blanket)
+        let consumed_ids: Vec<String> = batch
+            .iter()
+            .filter_map(|s| s.signal_id.clone())
+            .collect();
+        if let Err(e) = signal_store.mark_consumed(&self.model_id, &consumed_ids) {
             error!(
                 model_id = %self.model_id,
                 error = %e,

@@ -84,10 +84,10 @@ impl SignalStore for PgSignalStore {
         limit: Option<usize>,
     ) -> anyhow::Result<Vec<TrainingSignal>> {
         self.block_on(async {
-            let rows: Vec<(String, String, String, String, Option<f32>)> = match limit {
+            let rows: Vec<(String, String, String, String, String, Option<f32>)> = match limit {
                 Some(n) => {
                     sqlx::query_as(
-                        "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                        "SELECT id::text, model_id, input_text, predicted_label, corrected_label, original_confidence \
                          FROM model_signals \
                          WHERE model_id = $1 AND consumed = FALSE \
                          ORDER BY created_at ASC \
@@ -100,7 +100,7 @@ impl SignalStore for PgSignalStore {
                 }
                 None => {
                     sqlx::query_as(
-                        "SELECT model_id, input_text, predicted_label, corrected_label, original_confidence \
+                        "SELECT id::text, model_id, input_text, predicted_label, corrected_label, original_confidence \
                          FROM model_signals \
                          WHERE model_id = $1 AND consumed = FALSE \
                          ORDER BY created_at ASC",
@@ -113,7 +113,8 @@ impl SignalStore for PgSignalStore {
 
             Ok(rows
                 .into_iter()
-                .map(|(mid, it, pl, cl, oc)| TrainingSignal {
+                .map(|(sid, mid, it, pl, cl, oc)| TrainingSignal {
+                    signal_id: Some(sid),
                     model_id: mid,
                     input_text: it,
                     predicted_label: pl,
@@ -124,7 +125,30 @@ impl SignalStore for PgSignalStore {
         })
     }
 
-    fn mark_consumed(&self, model_id: &str) -> anyhow::Result<()> {
+    fn mark_consumed(&self, model_id: &str, signal_ids: &[String]) -> anyhow::Result<()> {
+        if signal_ids.is_empty() {
+            return Ok(());
+        }
+        self.block_on(async {
+            // Parse string IDs back to UUIDs for the ANY($2) clause
+            let uuids: Vec<sqlx::types::Uuid> = signal_ids
+                .iter()
+                .map(|s| s.parse::<sqlx::types::Uuid>())
+                .collect::<Result<_, _>>()
+                .map_err(|e| anyhow::anyhow!("invalid signal id: {e}"))?;
+            sqlx::query(
+                "UPDATE model_signals SET consumed = TRUE \
+                 WHERE model_id = $1 AND id = ANY($2) AND consumed = FALSE",
+            )
+            .bind(model_id)
+            .bind(&uuids)
+            .execute(&self.pool)
+            .await?;
+            Ok(())
+        })
+    }
+
+    fn mark_all_consumed(&self, model_id: &str) -> anyhow::Result<()> {
         self.block_on(async {
             sqlx::query(
                 "UPDATE model_signals SET consumed = TRUE \

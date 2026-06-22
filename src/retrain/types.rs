@@ -351,6 +351,7 @@ mod tests {
     fn extract_features_correct_predictions() {
         let signals = vec![
             TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: "hello".into(),
                 predicted_label: "safe".into(),
@@ -358,6 +359,7 @@ mod tests {
                 original_confidence: Some(0.9),
             },
             TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: "world".into(),
                 predicted_label: "safe".into(),
@@ -378,6 +380,7 @@ mod tests {
     fn extract_features_with_corrections() {
         let signals = vec![
             TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: "pii data".into(),
                 predicted_label: "safe".into(),
@@ -429,6 +432,7 @@ mod tests {
         // Only 2 corrections — below default min_corrections_for_update of 5
         let signals = vec![
             TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: "a".into(),
                 predicted_label: "safe".into(),
@@ -436,6 +440,7 @@ mod tests {
                 original_confidence: Some(0.6),
             },
             TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: "b".into(),
                 predicted_label: "safe".into(),
@@ -490,6 +495,7 @@ mod tests {
         // 10 corrections (safe → unsafe) — well above min_corrections_for_update of 5
         let signals: Vec<_> = (0..10)
             .map(|i| TrainingSignal {
+                signal_id: None,
                 model_id: "test".into(),
                 input_text: format!("input {i}"),
                 predicted_label: "safe".into(),
@@ -632,6 +638,7 @@ mod integration_tests {
         // Seed 10 correction signals
         for i in 0..10 {
             store.record(&TrainingSignal {
+                signal_id: None,
                 model_id: "test_pipeline".into(),
                 input_text: format!("input {i}"),
                 predicted_label: "safe".into(),
