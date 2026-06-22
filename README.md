@@ -2,7 +2,7 @@
 
 **Multi-Model Mind** — a generic ONNX model registry with inference, correction signals, and a retrain pipeline.
 
-Dual implementation: **Rust** (root) and **Python** (`python/`). Both expose the same architecture, traits/protocols, and signal stores. Multimind has **zero knowledge** of any particular product, domain, or storage layer — wire it into your own routing, storage, and deployment systems.
+Dual implementation: **Rust** (`rust/`) and **Python** (`python/`). Both expose the same architecture, traits/protocols, and signal stores. Multimind has **zero knowledge** of any particular product, domain, or storage layer — wire it into your own routing, storage, and deployment systems.
 
 ## Architecture
 
@@ -38,18 +38,20 @@ Dual implementation: **Rust** (root) and **Python** (`python/`). Both expose the
 
 ```
 multimind/
-├── src/                  # Rust crate
-│   ├── lib.rs            # Core types, traits (SignalStore, ModelBackend)
-│   ├── config.rs         # TOML config parsing
-│   ├── registry.rs       # ModelRegistry
-│   ├── backends/         # ONNX inference backends
-│   ├── signals/          # SQLite + Postgres signal stores
-│   └── retrain/          # Pipeline, weight learning, artifacts
+├── rust/                 # Rust crate
+│   ├── Cargo.toml
+│   └── src/
+│       ├── lib.rs        # Core types, traits (SignalStore, ModelBackend)
+│       ├── config.rs     # TOML config parsing
+│       ├── registry.rs   # ModelRegistry
+│       ├── backends/     # ONNX inference backends
+│       ├── signals/      # SQLite + Postgres signal stores
+│       └── retrain/      # Pipeline, weight learning, artifacts
 ├── python/               # Python package (pip install multimind)
+│   ├── pyproject.toml
 │   ├── multimind/        # Package source (mirrors Rust module structure)
-│   ├── tests/            # pytest suite
-│   └── pyproject.toml    # Build/dependency config
-├── Cargo.toml
+│   └── tests/            # pytest suite
+├── LICENSE
 └── README.md
 ```
 
@@ -243,7 +245,7 @@ pipeline.start_background(signal_store, registry)
 
 ```bash
 # Rust
-cargo test --features full
+cd rust && cargo test --features full
 
 # Python
 cd python && pip install -e ".[dev]" && pytest -v
