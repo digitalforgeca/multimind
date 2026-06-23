@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS model_signals (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_model_signals_pending
-    ON model_signals (model_id, consumed, created_at DESC);
+    ON model_signals (model_id, consumed, created_at ASC);
 "#;
 
     /// Run an async future synchronously.
