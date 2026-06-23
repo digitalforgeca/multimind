@@ -126,13 +126,7 @@ class RetrainPipeline:
             with self._lock:
                 current = copy.deepcopy(self._current_model)
 
-            weight_updates = learn_weights(current, features, self._config)
-
-            # Apply updates to a copy
-            updated = copy.deepcopy(current)
-            updated.set_version(current.version() + 1)
-            for cat, val in weight_updates.items():
-                updated.set_adjustment(cat, val)
+            updated = learn_weights(current, features, self._config)
 
             # 4. Create artifact
             artifact = RetrainArtifact.from_model(updated, self._model_id, len(batch))
@@ -220,7 +214,7 @@ class RetrainPipeline:
         def _loop() -> None:
             while not self._stop.is_set():
                 # Wait for interval or trigger
-                triggered = self._trigger.wait(timeout=self._config.check_interval_secs)
+                triggered = self._trigger.wait(timeout=self._config.check_interval)
                 if self._stop.is_set():
                     break
                 if triggered:

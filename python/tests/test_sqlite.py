@@ -109,3 +109,30 @@ def test_multiple_models_isolated():
     store.mark_consumed("model_a", ids)
     assert store.count_pending("model_a") == 0
     assert store.count_pending("model_b") == 1
+
+
+def test_export_with_limit():
+    store = SqliteSignalStore.in_memory()
+
+    for i in range(10):
+        store.record(TrainingSignal(
+            model_id="test",
+            input_text=f"input {i}",
+            predicted_label="a",
+            corrected_label="b",
+            original_confidence=0.5,
+        ))
+
+    # Without limit: get all 10
+    all_signals = store.export_pending("test")
+    assert len(all_signals) == 10
+    # All exported signals have IDs
+    assert all(s.signal_id is not None for s in all_signals)
+
+    # With limit: get exactly 3
+    limited = store.export_pending("test", limit=3)
+    assert len(limited) == 3
+
+    # Limit larger than available: get all
+    big_limit = store.export_pending("test", limit=100)
+    assert len(big_limit) == 10

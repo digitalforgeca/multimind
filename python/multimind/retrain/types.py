@@ -25,7 +25,7 @@ class RetrainConfig:
     Attributes:
         signal_threshold: Minimum unconsumed signals before a retrain is eligible.
         batch_size: Maximum signals to consume per retrain batch.
-        check_interval_secs: Background check interval in seconds.
+        check_interval: Background check interval in seconds.
         learning_rate: Learning rate for weight updates (0.0–1.0).
         min_corrections_for_update: Minimum correction signals for a category
             before applying its update.
@@ -33,7 +33,7 @@ class RetrainConfig:
     """
     signal_threshold: int = 200
     batch_size: int = 1000
-    check_interval_secs: float = 3600.0
+    check_interval: float = 3600.0
     learning_rate: float = 0.05
     min_corrections_for_update: int = 5
     artifact_dir: str = "/tmp/multimind-models"
@@ -161,32 +161,27 @@ def learn_weights(
     model: WeightModel,
     features: SignalFeatures,
     config: RetrainConfig,
-) -> dict[str, float]:
+) -> WeightModel:
     """Apply learned weight updates based on extracted features.
+
+    Returns a deep copy of the model with updated version and adjustments.
+    Mirrors the Rust implementation exactly.
 
     Uses the correction rate to adjust category weights:
     - High correction rate → suppress (lower weight)
     - Low correction rate → boost (higher weight)
-
-    Returns a dict of category → new adjustment value.
-    The caller is responsible for applying these to a copy of their model.
-
-    Note: The Rust version returns a cloned WeightModel. Here we return a
-    dict of updates so Python consumers don't need deep-copy gymnastics.
-    The pipeline's ``run_retrain`` handles the full model update.
     """
-    new_version = model.version() + 1
-    updates: dict[str, float] = {}
+    import copy
+    updated = copy.deepcopy(model)
+    updated.set_version(model.version() + 1)
 
     for category in model.categories():
         cat_features = features.category_signals.get(category)
         if cat_features is None:
-            updates[category] = model.adjustment(category)
             continue
 
         # Skip if not enough corrections to be statistically meaningful
         if cat_features.corrections < config.min_corrections_for_update:
-            updates[category] = model.adjustment(category)
             continue
 
         correction_rate = (
@@ -199,9 +194,9 @@ def learn_weights(
         current = model.adjustment(category)
         delta = config.learning_rate * (1.0 - 2.0 * correction_rate)
         new_adjustment = max(0.1, min(10.0, current + delta))
-        updates[category] = new_adjustment
+        updated.set_adjustment(category, new_adjustment)
 
-    return updates
+    return updated
 
 
 # ── Artifact ────────────────────────────────────────────────────────────────

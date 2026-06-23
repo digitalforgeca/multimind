@@ -136,10 +136,40 @@ def test_learn_weights_no_change_below_threshold():
 
     features = extract_features(signals)
     config = RetrainConfig()
-    updates = learn_weights(model, features, config)
+    updated = learn_weights(model, features, config)
 
-    # Adjustments shouldn't change (below threshold)
-    assert abs(updates["safe"] - 1.0) < 1e-9
+    # Version should bump
+    assert updated.version() == 1
+    # But adjustments shouldn't change (below threshold)
+    assert abs(updated.adjustment("safe") - 1.0) < 1e-9
+
+
+def test_learn_weights_applies_above_threshold():
+    model = SampleWeightModel(
+        version=0,
+        adjustments={"safe": 1.0, "unsafe": 1.0},
+    )
+
+    # 10 corrections (safe → unsafe) — well above min_corrections_for_update of 5
+    signals = [
+        TrainingSignal(
+            model_id="test",
+            input_text=f"input {i}",
+            predicted_label="safe",
+            corrected_label="unsafe",
+            original_confidence=0.6,
+        )
+        for i in range(10)
+    ]
+
+    features = extract_features(signals)
+    config = RetrainConfig()
+    updated = learn_weights(model, features, config)
+
+    # Version should bump
+    assert updated.version() == 1
+    # "safe" had 100% correction rate → should decrease
+    assert updated.adjustment("safe") < 1.0
 
 
 # ── Artifact tests ──────────────────────────────────────────────────────────
